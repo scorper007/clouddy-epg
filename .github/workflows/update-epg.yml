@@ -1,0 +1,81 @@
+name: Update ClouDDy EPG
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-epg:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and fix EPG
+        run: |
+          python3 <<'PY'
+          import urllib.request
+          import gzip
+          import re
+          import xml.etree.ElementTree as ET
+
+          SOURCE = "http://plist.link/epg.xml.gz"
+          OUTPUT = "epg_clouddy.xml.gz"
+
+          print("Downloading EPG...")
+          urllib.request.urlretrieve(SOURCE, "/tmp/source.xml.gz")
+
+          print("Decompressing...")
+          with gzip.open("/tmp/source.xml.gz", "rb") as f:
+              data = f.read()
+
+          print(f"XML size: {len(data):,} bytes")
+
+          print("Fixing invalid XML ampersands...")
+
+          fixed = re.sub(
+              rb'&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9A-Fa-f]+;)',
+              b'&amp;',
+              data
+          )
+
+          print("Validating XML...")
+
+          ET.fromstring(fixed)
+
+          print("XML is valid.")
+
+          print("Compressing...")
+
+          with gzip.open(OUTPUT, "wb", compresslevel=6) as f:
+              f.write(fixed)
+
+          print(f"Created {OUTPUT}")
+          PY
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet -- epg_clouddy.xml.gz; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "EPG has not changed."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "EPG has changed."
+          fi
+
+      - name: Commit and push updated EPG
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add epg_clouddy.xml.gz
+
+          git commit -m "Update EPG"
+          git push
